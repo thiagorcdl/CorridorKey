@@ -93,10 +93,16 @@ def _decode_alpha_channel(raw: np.ndarray) -> np.ndarray:
       which weights channels by luminance rather than blindly picking one.
     - 4-channel BGRA (H, W, 4): channel 3 (alpha) is returned directly, since
       that is where image-editing tools write the actual transparency data.
+    - More than 4 channels (H, W, N) where N > 4: the first three channels are
+      treated as BGR and converted to grayscale as a best-effort fallback.
+
+    Raises:
+        ValueError: if the array has an unsupported shape, such as a 2-channel
+            image (H, W, 2), a 1-D array, or any other layout that cannot be
+            unambiguously interpreted as an alpha mask.
 
     Args:
-        raw: numpy array with shape (H, W), (H, W, 3), or (H, W, 4) as
-             produced by cv2.imread or a cv2.VideoCapture.read() frame.
+        raw: numpy array produced by cv2.imread or cv2.VideoCapture.read().
 
     Returns:
         2D numpy array of shape (H, W) with the same dtype as the input.
@@ -112,10 +118,12 @@ def _decode_alpha_channel(raw: np.ndarray) -> np.ndarray:
             return cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
         elif channels == 4:
             return raw[:, :, 3]
+        elif channels > 4:
+            # More channels than expected (e.g. a multichannel EXR slice):
+            # treat the first three as BGR and convert to grayscale.
+            return cv2.cvtColor(raw[:, :, :3], cv2.COLOR_BGR2GRAY)
 
-    # Unexpected channel count or number of dimensions: fall back to converting
-    # the first 3 channels to grayscale so we always return a 2D array.
-    return cv2.cvtColor(raw[:, :, :3], cv2.COLOR_BGR2GRAY)
+    raise ValueError(f"Unsupported array shape for alpha decoding: {raw.shape}")
 
 
 # --- Classes ---

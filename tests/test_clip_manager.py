@@ -410,3 +410,29 @@ class TestDecodeAlphaChannel:
         assert result.ndim == 2
         assert result.shape == (4, 4)
         assert np.all(result == 128)
+
+    def test_more_than_4_channels_falls_back_to_bgr_grayscale(self):
+        """Arrays with more than 4 channels use the first 3 as BGR fallback."""
+        data = np.zeros((4, 4, 6), dtype=np.uint8)
+        data[:, :, 0] = 50  # B
+        data[:, :, 1] = 100  # G
+        data[:, :, 2] = 150  # R
+        data[:, :, 3:] = 200  # other channels should be ignored
+
+        result = _decode_alpha_channel(data)
+        expected = cv2.cvtColor(data[:, :, :3], cv2.COLOR_BGR2GRAY)
+
+        assert result.ndim == 2
+        np.testing.assert_array_equal(result, expected)
+
+    def test_2_channel_array_raises_value_error(self):
+        """A 2-channel array has no unambiguous alpha interpretation and must raise."""
+        bad = np.zeros((4, 4, 2), dtype=np.uint8)
+        with pytest.raises(ValueError, match="Unsupported array shape"):
+            _decode_alpha_channel(bad)
+
+    def test_1d_array_raises_value_error(self):
+        """A flat 1-D array cannot be an image and must raise."""
+        bad = np.zeros(16, dtype=np.uint8)
+        with pytest.raises(ValueError, match="Unsupported array shape"):
+            _decode_alpha_channel(bad)
