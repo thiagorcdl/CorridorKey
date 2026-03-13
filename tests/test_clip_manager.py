@@ -1,8 +1,9 @@
 """Tests for clip_manager.py utility functions and ClipEntry discovery.
 
 These tests verify the non-interactive parts of clip_manager: file type
-detection, Windows→Linux path mapping, and the ClipEntry asset discovery
-that scans directory trees to find Input/AlphaHint pairs.
+detection, Windows->Linux path mapping, the ClipEntry asset discovery
+that scans directory trees to find Input/AlphaHint pairs, and the
+alpha mask decoding helper used during inference.
 
 No GPU, model weights, or interactive input required.
 """
@@ -18,6 +19,7 @@ import pytest
 from clip_manager import (
     ClipAsset,
     ClipEntry,
+    _decode_alpha_channel,
     is_image_file,
     is_video_file,
     map_path,
@@ -290,3 +292,108 @@ class TestOrganizeTarget:
         assert len(input_files) == 2
         # Original loose files should be gone
         assert not (shot / "frame_0000.png").exists()
+
+
+# ---------------------------------------------------------------------------
+# _decode_alpha_channel
+# ---------------------------------------------------------------------------
+
+
+class TestDecodeAlphaChannel:
+    """Unit tests for _decode_alpha_channel, the helper that extracts a
+    single-channel float32 alpha mask from raw arrays returned by cv2.imread
+    or cv2.VideoCapture.read().
+
+    Regression for GitHub issue #1: the inline code used frame[:, :, 2]
+    (OpenCV BGR index 2 = red) for video frames and mask_in[:, :, 0]
+    (blue channel) for 3-channel image files, producing wrong masks whenever
+    the red and blue channels of the alpha video differed.
+    """
+
+    def test_2d_passthrough(self):
+        """A 2D (H, W) array is returned unchanged."""
+        mask = np.array([[0.5, 0.8], [0.2, 1.0]], dtype=np.float32)
+        result = _decode_alpha_channel(mask)
+        np.testing.assert_array_equal(result, mask)
+
+    def test_2d_passthrough_preserves_dtype(self):
+        """Dtype of a 2D input is not altered."""
+        mask_u8 = np.full((4, 4), 128, dtype=np.uint8)
+        assert _decode_alpha_channel(mask_u8).dtype == np.uint8
+
+    def test_bgr_3channel_produces_2d_output(self):
+        """A 3-channel BGR array must yield a 2D result, not a 3D one."""
+        bgr = np.zeros((4, 4, 3), dtype=np.uint8)
+        result = _decode_alpha_channel(bgr)
+        assert result.ndim == 2
+        assert result.shape == (4, 4)
+
+    def test_bgr_3channel_uses_luminance_not_blue_channel(self):
+        """BGR image: result must be luminance, not channel 0 (blue).
+
+        Channel 0 in BGR is blue. A pure-red image (B=0, G=0, R=200)
+        would give channel-0 = 0, but luminance ~ 60. The old code
+        extracted channel 0 and would have returned all zeros here.
+        """
+        bgr = np.zeros((4, 4, 3), dtype=np.uint8)
+        bgr[:, :, 2] = 200  # R in BGR
+
+        result = _decode_alpha_channel(bgr)
+
+        expected = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        np.testing.assert_array_equal(result, expected)
+        # Sanity: if this were channel 0 (blue), everything would be 0.
+        assert not np.all(result == 0), "extracted blue channel instead of grayscale"
+
+    def test_bgr_3channel_regression_video_frame(self):
+        """Regression: video alpha frames were read via frame[:, :, 2] (red).
+
+        A frame where R != grayscale luminance must not return the red channel.
+        """
+        # B=10, G=10, R=200 in RGB terms -> in BGR: [10, 10, 200]
+        bgr = np.full((8, 8, 3), 10, dtype=np.uint8)
+        bgr[:, :, 2] = 200  # red in BGR order
+
+        result = _decode_alpha_channel(bgr)
+        expected = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+
+        np.testing.assert_array_equal(result, expected)
+        # The old code returned 200 (red channel value); after the fix it
+        # must not equal 200 for a frame where luminance differs from red.
+        assert not np.all(result == 200), "still reading the red channel instead of grayscale"
+
+    def test_bgra_4channel_uses_alpha_channel_not_blue(self):
+        """BGRA image: must return channel 3 (alpha), not channel 0 (blue).
+
+        The old code passed the entire 3D array through for 4-channel inputs,
+        which caused downstream shape errors or wrong compositing.
+        """
+        bgra = np.zeros((4, 4, 4), dtype=np.uint8)
+        bgra[:, :, 0] = 50  # blue
+        bgra[:, :, 3] = 200  # alpha
+
+        result = _decode_alpha_channel(bgra)
+
+        assert result.ndim == 2
+        assert result.shape == (4, 4)
+        assert np.all(result == 200), "did not extract the alpha channel from BGRA"
+
+    def test_bgra_4channel_ignores_color_channels(self):
+        """BGRA: color channels must not contaminate the returned mask."""
+        bgra = np.ones((4, 4, 4), dtype=np.uint8) * 255
+        bgra[:, :, 3] = 128  # alpha = half
+
+        result = _decode_alpha_channel(bgra)
+        assert np.all(result == 128)
+
+    def test_uniform_white_bgr_gives_white_grayscale(self):
+        """A fully white BGR frame must produce a fully white grayscale mask."""
+        bgr = np.full((4, 4, 3), 255, dtype=np.uint8)
+        result = _decode_alpha_channel(bgr)
+        assert np.all(result == 255)
+
+    def test_uniform_black_bgr_gives_black_grayscale(self):
+        """A fully black BGR frame must produce a fully black grayscale mask."""
+        bgr = np.zeros((4, 4, 3), dtype=np.uint8)
+        result = _decode_alpha_channel(bgr)
+        assert np.all(result == 0)

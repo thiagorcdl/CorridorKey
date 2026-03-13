@@ -79,6 +79,38 @@ def map_path(win_path: str) -> str:
     return win_path
 
 
+def _decode_alpha_channel(raw: np.ndarray) -> np.ndarray:
+    """Extract a single-channel alpha mask from a raw array returned by OpenCV.
+
+    OpenCV stores images in BGR (or BGRA) channel order. Alpha hint masks are
+    grayscale by nature, but artists may save them as 3-channel RGB or as
+    4-channel RGBA images. This function normalises all three cases to a 2D
+    (H, W) array without altering the dtype, so the caller can apply bit-depth
+    normalisation separately.
+
+    - 2D (H, W): returned as-is.
+    - 3-channel BGR (H, W, 3): converted to grayscale via cv2.COLOR_BGR2GRAY,
+      which weights channels by luminance rather than blindly picking one.
+    - 4-channel BGRA (H, W, 4): channel 3 (alpha) is returned directly, since
+      that is where image-editing tools write the actual transparency data.
+
+    Args:
+        raw: numpy array with shape (H, W), (H, W, 3), or (H, W, 4) as
+             produced by cv2.imread or a cv2.VideoCapture.read() frame.
+
+    Returns:
+        2D numpy array of shape (H, W) with the same dtype as the input.
+    """
+    if raw.ndim == 2:
+        return raw
+    if raw.shape[2] == 3:
+        return cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
+    if raw.shape[2] == 4:
+        return raw[:, :, 3]
+    # Unexpected channel count: fall back to converting the first 3 channels.
+    return cv2.cvtColor(raw[:, :, :3], cv2.COLOR_BGR2GRAY)
+
+
 # --- Classes ---
 class ClipAsset:
     def __init__(self, path: str, asset_type: str) -> None:
@@ -707,7 +739,7 @@ def run_inference(
                 ret, frame = alpha_cap.read()
                 if not ret:
                     break
-                mask_linear = frame[:, :, 2].astype(np.float32) / 255.0
+                mask_linear = _decode_alpha_channel(frame).astype(np.float32) / 255.0
             else:
                 fpath = os.path.join(clip.alpha_asset.path, alpha_files[i])
                 mask_in = cv2.imread(fpath, cv2.IMREAD_ANYDEPTH | cv2.IMREAD_UNCHANGED)
@@ -715,20 +747,14 @@ def run_inference(
                 if mask_in is None:
                     continue
 
-                if mask_in.ndim == 3:
-                    if mask_in.shape[2] == 3:
-                        mask_linear = mask_in[:, :, 0]
-                    else:
-                        mask_linear = mask_in
-                else:
-                    mask_linear = mask_in
+                mask_2d = _decode_alpha_channel(mask_in)
 
-                if mask_linear.dtype == np.uint8:
-                    mask_linear = mask_linear.astype(np.float32) / 255.0
-                elif mask_linear.dtype == np.uint16:
-                    mask_linear = mask_linear.astype(np.float32) / 65535.0
+                if mask_2d.dtype == np.uint8:
+                    mask_linear = mask_2d.astype(np.float32) / 255.0
+                elif mask_2d.dtype == np.uint16:
+                    mask_linear = mask_2d.astype(np.float32) / 65535.0
                 else:
-                    mask_linear = mask_linear.astype(np.float32)
+                    mask_linear = mask_2d.astype(np.float32)
 
             if mask_linear.shape[:2] != img_srgb.shape[:2]:
                 mask_linear = cv2.resize(
