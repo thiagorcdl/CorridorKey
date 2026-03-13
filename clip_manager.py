@@ -103,11 +103,18 @@ def _decode_alpha_channel(raw: np.ndarray) -> np.ndarray:
     """
     if raw.ndim == 2:
         return raw
-    if raw.shape[2] == 3:
-        return cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
-    if raw.shape[2] == 4:
-        return raw[:, :, 3]
-    # Unexpected channel count: fall back to converting the first 3 channels.
+
+    if raw.ndim == 3:
+        channels = raw.shape[2]
+        if channels == 1:
+            return raw.squeeze(axis=2)
+        elif channels == 3:
+            return cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
+        elif channels == 4:
+            return raw[:, :, 3]
+
+    # Unexpected channel count or number of dimensions: fall back to converting
+    # the first 3 channels to grayscale so we always return a 2D array.
     return cv2.cvtColor(raw[:, :, :3], cv2.COLOR_BGR2GRAY)
 
 

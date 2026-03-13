@@ -397,3 +397,16 @@ class TestDecodeAlphaChannel:
         bgr = np.zeros((4, 4, 3), dtype=np.uint8)
         result = _decode_alpha_channel(bgr)
         assert np.all(result == 0)
+
+    def test_single_channel_with_trailing_dim_is_squeezed(self):
+        """A (H, W, 1) array must return a 2D (H, W) result, not crash.
+
+        Some cv2.imread calls with IMREAD_ANYDEPTH can return a (H, W, 1)
+        array depending on the source file. The old fallback path would have
+        called cv2.COLOR_BGR2GRAY on a 1-channel image, which raises an error.
+        """
+        mask = np.full((4, 4, 1), 128, dtype=np.uint8)
+        result = _decode_alpha_channel(mask)
+        assert result.ndim == 2
+        assert result.shape == (4, 4)
+        assert np.all(result == 128)
