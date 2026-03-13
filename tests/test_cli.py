@@ -60,6 +60,17 @@ class TestInvalidArgs:
         result = runner.invoke(app, ["nonexistent"])
         assert result.exit_code != 0
 
+    def test_action_flag_is_not_a_valid_argument(self):
+        """--action is not a recognized option; using it must fail."""
+        result = runner.invoke(app, ["--action", "list"])
+        assert result.exit_code != 0
+
+    def test_list_clips_is_a_valid_subcommand(self):
+        """list-clips must succeed as the intended default Docker CMD."""
+        with patch("clip_manager.scan_clips", return_value=[]):
+            result = runner.invoke(app, ["list-clips"])
+        assert result.exit_code == 0
+
 
 # ---------------------------------------------------------------------------
 # InferenceSettings defaults
