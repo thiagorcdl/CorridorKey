@@ -32,4 +32,4 @@ USER appuser
 ENV OPENCV_IO_ENABLE_OPENEXR=1
 
 ENTRYPOINT ["/app/.venv/bin/python", "corridorkey_cli.py"]
-CMD ["--action", "list"]
+CMD ["list-clips"]
